@@ -1,0 +1,8 @@
+{
+"expenses": [
+	{"payer": "Bob", "amount": 50.00, "description": "Cable bill"},
+	{"payer": "Alice", "amount": "Test", "description": "Electric bill"},
+	{"payer": "Chris", "amount": 80.00, "description": "Rent"},
+	{"payer": "Bob", "amount": 30.00, "description": "Pizza"}
+	]
+}
