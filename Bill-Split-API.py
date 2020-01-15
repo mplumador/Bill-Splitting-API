@@ -1,21 +1,13 @@
 from flask import Flask
 from flask import request
 from flask import abort
-#from flask import session
+from flask import session
 import numbers
 app = Flask(__name__)
 
 #Needed for using a session to store cookies of records
-#app.secret_key = "SuperSecretKey"
-#This should be offloaded via a config file, and should be some random string
-
-#We should not use a globally defined list to store the records kept by our POST to the /record URI
-#This will result in every user that makes a POST to record being added to the same 'expenses' object.
-#This should be handled by storing this data as a cookie in the session, or perhaps a database linked to a specific user
-#I spent a few hours attempting to get the session information to maintain persistence, but I am unsure at this point if
-#my cURL commands for testing are correct or if I am not implementing the session correctly.
-recordsKept = []
-
+app.secret_key = "SuperSecretKey"
+#This should be offloaded via a config file, and should be some random string, as it is used to encrypt our cookies
 
 #https://stackoverflow.com/questions/268272/getting-key-with-maximum-value-in-dictionary
 #This will not return a list of all keys with the same max value, but will return the first instance
@@ -44,7 +36,6 @@ def validateRecord(record):
 
 def settlementDict(expenseList):
     settleDict = {}
-    #resultDict = {'settlement':[]}
     totalAmount = 0
     for people in expenseList:
         currName = people.get('payer')
@@ -91,6 +82,7 @@ def settlementMath(pricePerPerson,settleDict):
             currLargestContributor = getKeyOfLargestValue(settleDict)
         #currLargestContributor = getKeyOfLargestValue(settleDict)
         #we don't need to update this outside of the FOR loop, since it will already be updated
+        #We update this inside the FOR loop, for the case that after a payment has been made there is a new transaction leader.
     return resultDict
     
 
@@ -106,60 +98,62 @@ def splitHandler():
     #Checking for if the request is json causes errors on a simple GET request with a body.
     #print(request.is_json)
     #Since we can't check if the request is json formatted, we force the body to be read as json regardless
-    content = request.get_json(force=True)
-    #dict.get will return none if the key does not exist
-    #This will be how we filter out invalid data
-    expenses = content.get('expenses')
-    if(expenses is not None):
-        try:
-            #SettlementDict returns a tuple of price per person as well as the settlement dictionary
-            pricePer, setDict = settlementDict(expenses)
-            result = settlementMath(pricePer,setDict)
-            return result
-        except Exception as e:
-            return {"Error code":400, "Error message":e.args[0]}, 400
-    else:
-        #Throw 400 status code and details
-        return {"Error code":400, "Error message":"Failed to find 'expenses' key in the request"}, 400
-    
-
+    #This could produce an error, so we surround it in a try-catch block.
+    try:
+        content = request.get_json(force=True)
+        #dict.get will return none if the key does not exist
+        #This will be how we filter out invalid data
+        expenses = content.get('expenses')
+        if(expenses is not None):
+            try:
+                #SettlementDict returns a tuple of price per person as well as the settlement dictionary
+                pricePer, setDict = settlementDict(expenses)
+                result = settlementMath(pricePer,setDict)
+                return result
+            except Exception as e:
+                return {"Error code":400, "Error message":e.args[0]}, 400
+        else:
+            #Throw 400 status code and details
+            return {"Error code":400, "Error message":"Failed to find 'expenses' key in the request"}, 400
+    except Exception as e:
+        return {"Error code":400, "Error message":"Failed to parse request body as json"},400
 @app.route('/record', methods=['POST'])
 def recordHandler():
     if(request.is_json):
         content = request.get_json()
         try:
             validateRecord(content)
-            recordsKept.append(content)
+            temp = session.get('contributors')
+            if(temp is None):
+                #No session found, create it
+                session['contributors'] = [content]
+            else:
+                #Session found, update it
+                temp.append(content)
+                session['contributors'] = temp
+            #print(session['contributors'])
             return {"status":"OK"}, 200
         except Exception as e:
             return {"Error code":400, "Error message":e.args[0]}, 400
     else:
         return {"Error code":400, "Error message":"Body is not specified as application/json"},400
 
-    #Old stuff for attempting to implement a session
-    #print(content)
-    #print("Session? " +str(session.get('contributors')))
-    #if(session.get('contributors') is None):
-        #print("No session found")
-        #session['contributors'] = [content]
-    #else:
-       #session.get('contributors').append(content)
-    #print(session.get('contributors'))
-    #print(content['TestKey'])
-    #print(content['name'])
-
 @app.route('/settle',methods=['POST'])
 def settleHandler():
     #Technically all data should have already been validated prior to being added to the list (Via POST /record)
     #However, settleDict will check the validation again, meaning we need to re-surround in a try-catch block
     #This can be optimized by seperating out the validation from settleDict and implementing data validation into the GET /split method
-    try:
-        pricePer, setDict = settlementDict(recordsKept)
-        result = settlementMath(pricePer,setDict)
-        recordsKept.clear()
-        return result
-    except Exception as e:
-        return {"Error code":400, "Error message":e.args[0]}, 400
+    data = session.get('contributors')
+    if(data is None or len(data) == 0):
+        return {"Error code":400, "Error message:":"There were no records set in this session"}, 400
+    else:
+        try:
+            pricePer, setDict = settlementDict(data)
+            result = settlementMath(pricePer,setDict)
+            session['contributors'] = []
+            return result
+        except Exception as e:
+            return {"Error code":400, "Error message":e.args[0]}, 400
 
     
 if __name__ == '__main__':
